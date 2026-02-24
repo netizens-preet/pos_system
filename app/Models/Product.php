@@ -21,4 +21,8 @@ class Product extends Model
    {
        return $this->hasMany(order_item::class);
    } 
+   public function hasLowStock(): bool
+{
+    return $this->stock_quantity < 10;
+}
 }

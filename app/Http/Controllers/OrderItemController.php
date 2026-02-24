@@ -37,35 +37,33 @@ public function create(Order $order)
     /**
      * Store a newly created resource in storage.
      */
-    public function store(StoreOrderItemsRequest $request)
-    {
-        return DB::transaction(function () use ($request) {
-            $product = Product::lockForUpdate()->find($request->product_id);
+    public function store(Request $request)
+{
+    $product = Product::find($request->product_id);
 
-            // Block if insufficient stock
-            if ($product->stock_quantity < $request->quantity) {
-                return back()->with('error', 'Insufficient stock.');
-            }
-
-            // Auto-calculate prices
-            $unitPrice = $product->price;
-            $totalPrice = $unitPrice * $request->quantity;
-
-            $item = order_item::create([
-                'order_id'   => $request->order_id,
-                'product_id' => $request->product_id,
-                'quantity'   => $request->quantity,
-                'unit_price' => $unitPrice,
-                'total_price' => $totalPrice,
-            ]);
-
-            // Decrease product stock
-            $product->decrement('stock_quantity', $request->quantity);
-
-            return redirect()->back()->with('success', 'Item added to order.');
-        });
+    if (!$product) {
+        return back()->with('error', 'Product not found.');
     }
 
+    if ($product->stock_quantity < $request->quantity) {
+        return back()->with('error', 'Insufficient stock.');
+    }
+
+    $unitCost = $product->price;
+    $totalCost = $unitCost * $request->quantity;
+
+    order_item::create([
+        'order_id'   => $request->order_id,
+        'product_id' => $request->product_id,
+        'quantity'   => $request->quantity,
+        'unit_price' => $unitCost,
+        'total_price' => $totalCost,
+    ]);
+
+    Product::where('id', $product->id)->decrement('stock_quantity', $request->quantity);
+
+    return redirect()->back()->with('success', 'Item added to order.');
+}
     /**
      * Display the specified resource.
      */
@@ -96,42 +94,42 @@ public function edit(order_item $orderItem)
      * Update the specified resource in storage.
      */
     public function update(UpdateOrderItemsRequest $request, order_item $orderItem)
-    {
-        return DB::transaction(function () use ($request, $orderItem) {
-            $product = $orderItem->product;
+{
+    $product = $orderItem->product;
+    $input = $request->validated();
 
-            // 1. Revert old stock temporarily
-            $product->increment('stock_quantity', $orderItem->quantity);
-
-            // 2. Check if new quantity is available
-            if ($product->stock_quantity < $request->quantity) {
-                $product->decrement('stock_quantity', $orderItem->quantity); // Put it back
-                return back()->with('error', 'Insufficient stock for update.');
-            }
-
-            // 3. Update item and deduct new stock
-            $orderItem->update([
-                'quantity'    => $request->quantity,
-                'total_price' => $orderItem->unit_price * $request->quantity
-            ]);
-
-            $product->decrement('stock_quantity', $request->quantity);
-
-            return redirect()->back()->with('success', 'Item updated.');
-        });
+    if (!$product) {
+        return back()->with('error', 'Associated product not found.');
     }
+
+    Product::where('id', $product->id)->increment('stock_quantity', $orderItem->quantity);
+
+    $product->refresh();
+
+    if ($product->stock_quantity < $input['quantity']) {
+        Product::where('id', $product->id)->decrement('stock_quantity', $orderItem->quantity);
+        return back()->with('error', "Insufficient stock for {$product->name}.");
+    }
+
+    $orderItem->update([
+        'quantity'    => $input['quantity'],
+        'total_price' => $orderItem->unit_price * $input['quantity']
+    ]);
+
+    Product::where('id', $product->id)->decrement('stock_quantity', $input['quantity']);
+
+    return redirect()->back()->with('success', 'Item updated successfully.');
+}
 
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(order_item $orderItem)
-    {
-        DB::transaction(function () use ($orderItem) {
-            // Restore stock to product
-            $orderItem->product->increment('stock_quantity', $orderItem->quantity);
-            $orderItem->delete();
-        });
+public function destroy(order_item $orderItem)
+{
+    Product::where('id', $orderItem->product_id)->increment('stock_quantity', $orderItem->quantity);
+    
+    $orderItem->delete();
 
-        return redirect()->back()->with('success', 'Item removed.');
-    }
+    return redirect()->back()->with('success', 'Item removed.');
+}
 }

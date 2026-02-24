@@ -6,7 +6,7 @@ use App\Models\Order;
 use App\Http\Requests\StoreOrderRequest;
 
 use App\Models\{Product, OrderItem, Customer};
-use Illuminate\Http\Requests\UpdateOrderRequest;
+use App\Http\Requests\UpdateOrderRequest;
 use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
@@ -34,53 +34,50 @@ class OrderController extends Controller
      * Store a newly created resource in storage.
      */
     public function store(StoreOrderRequest $request)
-    {
-        
-        // Data is already validated (customer exists, items are valid)
-        return DB::transaction(function () use ($request) {
-            $subtotal = 0;
-            $orderItems = [];
-            $validatedData = $request->validated();
+{
+    $runningSubtotal = 0;
+    $freshItemsList = [];
+    $input = $request->validated();
 
-            foreach ($validatedData['items'] as $item) {
-                $product = Product::lockForUpdate()->find($item['product_id']);
+    foreach ($input['items'] as $itemData) {
+        $product = Product::find($itemData['product_id']);
 
-                // Business logic check: Stock availability
-                if ($product->stock_quantity < $item['quantity']) {
-                    // We throw an exception to trigger the DB rollback
-                    throw \Illuminate\Validation\ValidationException::withMessages([
-                        'items' => "Insufficient stock for {$product->name}. available: {$product->stock_quantity}"
-                    ]);
-                }
+        if (!$product) {
+            return back()->with('error', 'Selected product was not found.');
+        }
 
-                $lineTotal = $product->price * $item['quantity'];
-                $subtotal += $lineTotal;
+        if ($product->stock_quantity < $itemData['quantity']) {
+            return back()->with('error', "Insufficient stock for {$product->name}. Only {$product->stock_quantity} remaining.");
+        }
 
-                $orderItems[] = [
-                    'product_id'  => $product->id,
-                    'quantity'    => $item['quantity'],
-                    'unit_price'  => $product->price,
-                    'total_price' => $lineTotal,
-                ];
+        $lineCost = $product->price * $itemData['quantity'];
+        $runningSubtotal += $lineCost;
 
-                $product->decrement('stock_quantity', $item['quantity']);
-            }
+        $freshItemsList[] = [
+            'product_id'  => $product->id,
+            'quantity'    => $itemData['quantity'],
+            'unit_price'  => $product->price,
+            'total_price' => $lineCost,
+        ];
 
-            $order = Order::create([
-                'customer_id' => $validatedData['customer_id'],
-                'status'      => 'pending',
-                'subtotal'    => $subtotal,
-                'discount'    => $validatedData['discount'] ?? 0,
-                'total'       => $subtotal - ($validatedData['discount'] ?? 0),
-                'note'        => $validatedData['note'],
-                'ordered_at'  => now(),
-            ]);
-
-            $order->orderItems()->createMany($orderItems);
-
-            return redirect()->route('orders.index')->with('success', 'Order created successfully.');
-        });
+        // This static call avoids the 'Undefined method decrement' warning in VS Code
+        Product::where('id', $product->id)->decrement('stock_quantity', $itemData['quantity']);
     }
+
+    $order = Order::create([
+        'customer_id' => $input['customer_id'],
+        'status'      => 'pending',
+        'subtotal'    => $runningSubtotal,
+        'discount'    => $input['discount'] ?? 0,
+        'total'       => $runningSubtotal - ($input['discount'] ?? 0),
+        'note'        => $input['note'],
+        'ordered_at'  => now(),
+    ]);
+
+    $order->orderItems()->createMany($freshItemsList);
+
+    return redirect()->route('orders.index')->with('success', 'Order created successfully.');
+}
 
     
 
@@ -107,65 +104,59 @@ class OrderController extends Controller
     /**
      * Update the specified resource in storage.
      */
-   public function update(StoreOrderRequest $request, Order $order)
+  public function update(UpdateOrderRequest $request, Order $order)
 {
-    // Only allow updates if the order isn't already processed/cancelled
     if (!$order->isCancellable()) {
-        return back()->with('error', 'Cannot update an order that is not pending.');
+        return back()->with('error', 'Cannot update order');
     }
 
-    return DB::transaction(function () use ($request, $order) {
-        // 1. Restore Stock from current items before changing them
-        foreach ($order->orderItems as $oldItem) {
-            $oldItem->product->increment('stock_quantity', $oldItem->quantity);
+    foreach ($order->orderItems as $previousItem) {
+        $previousItem->product->increment('stock_quantity', $previousItem->quantity);
+    }
+
+    $runningSubtotal = 0;
+    $freshItemsList = [];
+    $input = $request->validated();
+
+    foreach ($input['items'] as $itemData) {
+        $product = Product::find($itemData['product_id']);
+
+        if (!$product) {
+            return back()->with('error', 'Product not found.');
         }
 
-        $subtotal = 0;
-        $newOrderItems = [];
-        $validatedData = $request->validated();
-
-        // 2. Process New Items
-        foreach ($validatedData['items'] as $item) {
-            $product = Product::lockForUpdate()->find($item['product_id']);
-
-            // Check if new quantities are available
-            if ($product->stock_quantity < $item['quantity']) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'items' => "Insufficient stock for {$product->name} during update."
-                ]);
-            }
-
-            $lineTotal = $product->price * $item['quantity'];
-            $subtotal += $lineTotal;
-
-            $newOrderItems[] = [
-                'product_id'  => $product->id,
-                'quantity'    => $item['quantity'],
-                'unit_price'  => $product->price,
-                'total_price' => $lineTotal,
-            ];
-
-            // Deduct new stock
-            $product->decrement('stock_quantity', $item['quantity']);
+        if ($product->stock_quantity < $itemData['quantity']) {
+            return back()->with('error', "Insufficient stock for {$product->name}.");
         }
 
-        // 3. Update the Order record
-        $order->update([
-            'customer_id' => $validatedData['customer_id'],
-            'subtotal'    => $subtotal,
-            'discount'    => $validatedData['discount'] ?? 0,
-            'total'       => $subtotal - ($validatedData['discount'] ?? 0),
-            'note'        => $validatedData['note'],
-        ]);
+        $lineCost = $product->price * $itemData['quantity'];
+        $runningSubtotal += $lineCost;
 
-        // 4. Replace old items with new items
-        $order->orderItems()->delete();
-        $order->orderItems()->createMany($newOrderItems);
+        $freshItemsList[] = [
+            'product_id'  => $product->id,
+            'quantity'    => $itemData['quantity'],
+            'unit_price'  => $product->price,
+            'total_price' => $lineCost,
+        ];
 
-        return redirect()->route('orders.index')->with('success', 'Order updated successfully.');
-    });
+        // SOLUTION: Call decrement directly on the Model Query instead of the variable
+        // This stops the "Undefined method" error in 99% of IDEs
+        Product::where('id', $product->id)->decrement('stock_quantity', $itemData['quantity']);
+    }
+
+    $order->update([
+        'customer_id' => $input['customer_id'],
+        'subtotal'    => $runningSubtotal,
+        'discount'    => $input['discount'] ?? 0,
+        'total'       => $runningSubtotal - ($input['discount'] ?? 0),
+        'note'        => $input['note'],
+    ]);
+
+    $order->orderItems()->delete();
+    $order->orderItems()->createMany($freshItemsList);
+
+    return redirect()->route('orders.index')->with('success', 'Order updated successfully.');
 }
-
     /**
      * Remove the specified resource from storage.
      */
@@ -175,7 +166,7 @@ class OrderController extends Controller
     }
     public function cancel(Order $order)
     {
-        if (!$order->isCancellable()) {
+         if (!$order->isCancellable()) {
             return back()->with('error', 'Only pending orders can be cancelled.');
         }
 
@@ -190,3 +181,4 @@ class OrderController extends Controller
     }
 
 }
+

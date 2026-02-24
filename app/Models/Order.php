@@ -8,12 +8,12 @@ class Order extends Model
 {
     protected $fillable = [
         "customer_id",
-        "order_date",
-        "total_amount",
         "status",
-        "notes",
-        "payment_method",
-        "discount_amount"
+        "subtotal",
+        "discount",
+        "total",
+        "note",
+        "ordered_at"
     ];
     public function order_items(): HasMany
    {
@@ -23,6 +23,8 @@ class Order extends Model
    {
        return $this->belongsTo(Customer::class);
    }
-   
+   public function isCancellable(): bool {
+        return $this->status === 'pending';
+    }
 }
 

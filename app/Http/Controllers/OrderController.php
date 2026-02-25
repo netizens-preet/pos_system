@@ -3,10 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use Illuminate\Http\Request;
 use App\Http\Requests\StoreOrderRequest;
+use App\Http\Requests\UpdateOrderRequest;
+
+
 
 use App\Models\{Product, OrderItem, Customer};
-use App\Http\Requests\UpdateOrderRequest;
+
 use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
@@ -86,7 +90,8 @@ class OrderController extends Controller
      */
     public function show(Order $order)
     {
-        //
+        $order->load(['customer', 'orderItems.product']);
+        return view('orders.show', compact('order'));
     }
 
     /**
@@ -177,8 +182,24 @@ class OrderController extends Controller
             $order->update(['status' => 'cancelled']);
         });
 
-        return redirect()->route('orders.index')->with('success', 'Order cancelled and stock restored.');
+        return redirect()->route('orders.show', $order)->with('success', 'Order cancelled and stock restored.');
     }
 
+    public function updateStatus(Order $order, $status)
+    {
+        $validStatuses = ['pending', 'processing', 'completed'];
+
+        if (!in_array($status, $validStatuses)) {
+            return back()->with('error', 'Invalid status.');
+        }
+
+        if ($order->status === 'cancelled') {
+            return back()->with('error', 'Cannot update status of a cancelled order.');
+        }
+
+        $order->update(['status' => $status]);
+
+        return redirect()->route('orders.show', $order)->with('success', "Order status updated to {$status}.");
+    }
 }
 

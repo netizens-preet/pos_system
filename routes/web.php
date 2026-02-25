@@ -1,5 +1,5 @@
 <?php
-
+use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ProductController;
@@ -32,4 +32,5 @@ Route::middleware('auth')->group(function () {
     Route::get('stock-alerts', [\App\Http\Controllers\ProductController::class, 'stockAlerts'])->name('stock-alerts');
 });
 
-require __DIR__ . '/auth.php';
+require __DIR__.'/auth.php';
+Route::resource('categories', CategoryController::class);
